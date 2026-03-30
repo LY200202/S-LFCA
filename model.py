@@ -90,20 +90,32 @@ class Model(nn.Module):
         self.num_channels = DINOV2_ARCHS[model_name]
         self.norm_layer = norm_layer
 
-        # -------- DINOv2 backbone --------
         self.model = torch.hub.load('facebookresearch/dinov2', model_name)
 
         total_blocks = len(self.model.blocks)
         assert 0 <= num_trainable_blocks <= total_blocks, \
             f"num_trainable_blocks must be in [0, {total_blocks}]"
         self.num_trainable_blocks = num_trainable_blocks
+        self.total_blocks = total_blocks
 
-        if self.num_trainable_blocks < total_blocks:
-            for blk in self.model.blocks[:-self.num_trainable_blocks] if self.num_trainable_blocks > 0 else self.model.blocks:
+        # Freeze the entire backbone first
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        # Unfreeze according to the number of trainable blocks
+        if self.num_trainable_blocks == 0:
+            pass
+        elif self.num_trainable_blocks == self.total_blocks:
+            for p in self.model.parameters():
+                p.requires_grad = True
+        else:
+            for blk in self.model.blocks[-self.num_trainable_blocks:]:
                 for p in blk.parameters():
-                    p.requires_grad = False
+                    p.requires_grad = True
+            if self.norm_layer:
+                for p in self.model.norm.parameters():
+                    p.requires_grad = True
 
-        # -------- FeatureGrouping --------
         if use_FeatureGrouping:
             self.featuregrouping = FeatureGrouping(
                 in_channels=self.num_channels,
@@ -132,29 +144,29 @@ class Model(nn.Module):
     def _forward_single(self, img):
 
         B, _, H, W = img.shape
-
         assert H % 14 == 0 and W % 14 == 0, "Input size must be divisible by 14"
 
-        x = self.model.prepare_tokens_with_masks(img)  # [B, 1+N, C]
+        x = self.model.prepare_tokens_with_masks(img)
 
-        # ---- Forward through frozen blocks ----
-        if self.num_trainable_blocks < len(self.model.blocks):
+        # Forward frozen blocks without gradient
+        if self.num_trainable_blocks < self.total_blocks:
             frozen_blocks = self.model.blocks[:-self.num_trainable_blocks] if self.num_trainable_blocks > 0 else self.model.blocks
             with torch.no_grad():
                 for blk in frozen_blocks:
                     x = blk(x)
             x = x.detach()
 
-        # ---- Forward through trainable blocks ----
+        # Forward trainable blocks with gradient
         if self.num_trainable_blocks > 0:
-            for blk in self.model.blocks[-self.num_trainable_blocks:]:
+            trainable_blocks = self.model.blocks[-self.num_trainable_blocks:]
+            for blk in trainable_blocks:
                 x = blk(x)
 
         if self.norm_layer:
             x = self.model.norm(x)
 
-        cls_token = x[:, 0]  # [B, C]
-        patch_tokens = x[:, 1:]  # [B, N, C]
+        cls_token = x[:, 0]
+        patch_tokens = x[:, 1:]
 
         h = H // 14
         w = W // 14
@@ -163,7 +175,7 @@ class Model(nn.Module):
             patch_tokens
             .reshape(B, h, w, self.num_channels)
             .permute(0, 3, 1, 2)
-        )  # [B, C, h, w]
+        )
 
         if self.use_FeatureGrouping:
             feature, local_feature = self.featuregrouping(patch_tokens, cls_token)
