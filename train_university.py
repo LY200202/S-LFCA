@@ -17,6 +17,7 @@ from datetime import datetime
 import pytz
 import argparse
 from shutil import copyfile, copytree
+from count_model_stats import count_model_stats
 
 
 def configuration():
@@ -153,6 +154,7 @@ if __name__ == '__main__':
     print(f"num_trainable_blocks = {config.num_trainable_blocks}")
 
     model = Model(model_name=config.model, num_trainable_blocks=config.num_trainable_blocks)
+    count_model_stats(model=model, input_size=(1, 3, config.img_size, config.img_size))
                           
     data_config = model.get_config()
     print(data_config)
