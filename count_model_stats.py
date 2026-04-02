@@ -170,5 +170,5 @@ if __name__ == "__main__":
         model=model,
         input_size=(1, 3, 378, 378),
         device=device,
-        verbose=False   # ���뿴ÿһ�������ϸ���ĳ� True
+        verbose=False
     )
